@@ -40,6 +40,37 @@ quark_router_opts = [
 CONF.register_opts(quark_router_opts, 'QUARK')
 
 
+def _validate_port_for_create(context, port_id, fixed_ip_address):
+    port = db_api.port_find(context, id=port_id, scope=db_api.ONE)
+    if not port:
+        raise exceptions.PortNotFound(port_id=port_id)
+
+    if not port.ip_addresses or len(port.ip_addresses) == 0:
+        raise qex.NoAvailableFixedIPsForPort(port_id=port_id)
+
+    if not fixed_ip_address:
+        fixed_ip = _get_next_available_fixed_ip(port)
+        if not fixed_ip:
+            raise qex.NoAvailableFixedIPsForPort(
+                port_id=port_id)
+    else:
+        fixed_ip = next((ip for ip in port.ip_addresses
+                        if (ip['address_readable'] == fixed_ip_address and
+                            ip.get('address_type') == ip_types.FIXED)),
+                        None)
+
+        if not fixed_ip:
+            raise qex.FixedIpDoesNotExistsForPort(
+                fixed_ip=fixed_ip_address, port_id=port_id)
+
+        if any(ip for ip in port.ip_addresses
+               if (ip.get('address_type') == ip_types.FLOATING and
+                   ip.fixed_ip['address_readable'] == fixed_ip_address)):
+            raise qex.PortAlreadyContainsFloatingIp(
+                port_id=port_id)
+    return fixed_ip
+
+
 def create_floatingip(context, content):
     """Allocate or reallocate a floating IP.
 
@@ -58,7 +89,7 @@ def create_floatingip(context, content):
     network_id = content.get('floating_network_id')
     fixed_ip_address = content.get('fixed_ip_address')
     ip_address = content.get('floating_ip_address')
-    port_id = content.get('port_id')
+    port_id = content.get('port_id', [])
 
     if not tenant_id:
         tenant_id = context.tenant_id
@@ -75,34 +106,10 @@ def create_floatingip(context, content):
     fixed_ip = None
     port = None
     if port_id:
-        port = db_api.port_find(context, id=port_id, scope=db_api.ONE)
-
-        if not port:
-            raise exceptions.PortNotFound(port_id=port_id)
-
-        if not port.ip_addresses or len(port.ip_addresses) == 0:
-            raise qex.NoAvailableFixedIPsForPort(port_id=port_id)
-
-        if not fixed_ip_address:
-            fixed_ip = _get_next_available_fixed_ip(port)
-            if not fixed_ip:
-                raise qex.NoAvailableFixedIPsForPort(
-                    port_id=port_id)
-        else:
-            fixed_ip = next((ip for ip in port.ip_addresses
-                            if (ip['address_readable'] == fixed_ip_address and
-                                ip.get('address_type') == ip_types.FIXED)),
-                            None)
-
-            if not fixed_ip:
-                raise qex.FixedIpDoesNotExistsForPort(
-                    fixed_ip=fixed_ip_address, port_id=port_id)
-
-            if any(ip for ip in port.ip_addresses
-                   if (ip.get('address_type') == ip_types.FLOATING and
-                       ip.fixed_ip['address_readable'] == fixed_ip_address)):
-                raise qex.PortAlreadyContainsFloatingIp(
-                    port_id=port_id)
+        if not isinstance(port_id, list):
+            port_id = [port_id]
+        for port_id_item in port_id:
+            _validate_port_for_create(context, port_id_item, fixed_ip_address)
 
     new_addresses = []
     ip_addresses = []
@@ -116,8 +123,11 @@ def create_floatingip(context, content):
         strategy_name = network.get("ipam_strategy")
 
     ipam_driver = ipam.IPAM_REGISTRY.get_strategy(strategy_name)
+    if isinstance(port_id, list) and port_id:
+        port_id = port_id[0]
     ipam_driver.allocate_ip_address(context, new_addresses, network_id,
-                                    port_id, CONF.QUARK.ipam_reuse_after,
+                                    port_id,
+                                    CONF.QUARK.ipam_reuse_after,
                                     seg_name, version=4,
                                     ip_addresses=ip_addresses,
                                     address_type=ip_types.FLOATING)

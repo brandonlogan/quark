@@ -14,10 +14,31 @@
 # limitations under the License.
 
 from neutron.api import extensions
+from neutron.api.v2 import attributes
+
+
+def _validate_single_or_list_of_unique_strings(data, valid_values):
+    if not isinstance(data, list):
+        return attributes.validators['type:uuid_or_none'](data)
+    else:
+        return attributes.validators['type:uuid_list'](data)
+
+attributes.validators['type:single_or_list_of_unique_strings'] = (
+    _validate_single_or_list_of_unique_strings)
 
 RESOURCE_NAME = "floatingip"
 RESOURCE_COLLECTION = RESOURCE_NAME + "s"
-EXTENDED_ATTRIBUTES_2_0 = {}
+
+EXTENDED_ATTRIBUTES_2_0 = {
+    RESOURCE_COLLECTION: {
+        'port_id': {'allow_post': True, 'allow_put': True,
+                    'validate': {
+                        'type:single_or_list_of_unique_strings': None
+                    },
+                    'is_visible': True, 'default': None,
+                    'required_by_policy': True}
+    }
+}
 
 
 class Floatingip(extensions.ExtensionDescriptor):
@@ -43,6 +64,10 @@ class Floatingip(extensions.ExtensionDescriptor):
     @classmethod
     def get_updated(cls):
         return "2013-03-25T19:00:00-00:00"
+
+    @classmethod
+    def get_required_extensions(cls):
+        return ['router']
 
     def get_extended_resources(self, version):
         if version == "2.0":

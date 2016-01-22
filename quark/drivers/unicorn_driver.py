@@ -46,9 +46,9 @@ class UnicornDriver(object):
     def get_name(cls):
         return "Unicorn"
 
-    def register_floating_ip(self, floating_ip, port, fixed_ip):
+    def register_floating_ip(self, floating_ip, ports, fixed_ip):
         url = CONF.QUARK.floating_ip_base_url
-        req = self._build_request_body(floating_ip, port, fixed_ip)
+        req = self._build_request_body(floating_ip, ports, fixed_ip)
 
         LOG.info("Calling unicorn to register floating ip: %s %s" % (url, req))
         r = requests.post(url, data=json.dumps(req))
@@ -59,10 +59,10 @@ class UnicornDriver(object):
             LOG.error("register_floating_ip: %s" % msg)
             raise ex.RegisterFloatingIpFailure(id=floating_ip.id)
 
-    def update_floating_ip(self, floating_ip, port, fixed_ip):
+    def update_floating_ip(self, floating_ip, ports, fixed_ip):
         url = "%s/%s" % (CONF.QUARK.floating_ip_base_url,
                          floating_ip["address_readable"])
-        req = self._build_request_body(floating_ip, port, fixed_ip)
+        req = self._build_request_body(floating_ip, ports, fixed_ip)
 
         LOG.info("Calling unicorn to register floating ip: %s %s" % (url, req))
         r = requests.put(url, data=json.dumps(req))
@@ -89,23 +89,31 @@ class UnicornDriver(object):
             LOG.error("remove_floating_ip: %s" % msg)
             raise ex.RemoveFloatingIpFailure(id=floating_ip.id)
 
-    @staticmethod
-    def _build_request_body(floating_ip, port, fixed_ip):
-        fixed_ips = [{"ip_address": ip.address_readable,
-                      "version": ip.version,
-                      "subnet_id": ip.subnet.id,
-                      "cidr": ip.subnet.cidr,
-                      "address_type": ip.address_type}
-                     for ip in port.ip_addresses
-                     if (ip.get("address_type") == ip_types.FIXED)]
+    @classmethod
+    def _build_fixed_ips(cls, ip_addresses):
+        return [{"ip_address": ip.address_readable,
+                  "version": ip.version,
+                  "subnet_id": ip.subnet.id,
+                  "cidr": ip.subnet.cidr,
+                  "address_type": ip.address_type}
+                for ip in ip_addresses
+                if (ip.get("address_type") == ip_types.FIXED)]
+
+    @classmethod
+    def _build_ports(cls, ports):
+        return [{"uuid": port.id,
+                 "name": port.name,
+                 "network_uuid": port.network_id,
+                 "mac_address": port.mac_address,
+                 "device_id": port.device_id,
+                 "device_owner": port.device_owner,
+                 "fixed_ip": cls._build_fixed_ips(port.ip_addresses)}
+                for port in ports]
+
+    @classmethod
+    def _build_request_body(cls, floating_ip, ports, fixed_ip):
         content = {"public_ip": floating_ip["address_readable"],
                    "endpoints": [
-                       {"port": {"uuid": port.id,
-                                 "name": port.name,
-                                 "network_uuid": port.network_id,
-                                 "mac_address": port.mac_address,
-                                 "device_id": port.device_id,
-                                 "device_owner": port.device_owner,
-                                 "fixed_ip": fixed_ips},
+                       {"ports": cls._build_ports(ports),
                         "private_ip": fixed_ip.address_readable}]}
         return {"floating_ip": content}
